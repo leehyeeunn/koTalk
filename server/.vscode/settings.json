@@ -1,0 +1,8 @@
+{
+  "python.defaultInterpreterPath": "C:\\KoTalk\\server\\venv\\Scripts\\python.exe",
+  "python.analysis.extraPaths": [
+    "./server/app",
+    "./server"
+  ],
+  "python.envFile": "${workspaceFolder}/server/.env"
+}
