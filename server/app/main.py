@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import CORS_ORIGINS
-from app.routers import health, stt, ipa
+from app.routers import health, stt, ipa, pron_eval
 from app.services.whisper_svc import load_model
 
 # Lifespan 정의
@@ -32,3 +32,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(stt.router)
 app.include_router(ipa.router)
+app.include_router(pron_eval.router)

@@ -1,7 +1,16 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { callIpa, callStt, callLipSync, SttResp, IpaResp } from "@/lib/api";
+import {
+  callIpa,
+  callStt,
+  callLipSync,
+  callPronEval,
+  SttResp,
+  IpaResp,
+  PronReport,
+  AiFeedback,
+} from "@/lib/api";
 
 type Phase =
   | "대기 중"
@@ -18,6 +27,12 @@ export default function RecorderWithViz() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
+  // 🔹 STT + 발음 평가 상태
+  const [stt, setStt] = useState<SttResp | null>(null);
+  const [report, setReport] = useState<PronReport | null>(null);
+  const [feedback, setFeedback] = useState<AiFeedback | null>(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+
   const media = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -27,6 +42,9 @@ export default function RecorderWithViz() {
       setErr(null);
       setIpa(null);
       setVideoUrl(null);
+      setStt(null);
+      setReport(null);
+      setFeedback(null);
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -44,14 +62,37 @@ export default function RecorderWithViz() {
           // 1️⃣ STT (음성 → 텍스트)
           setPhase("처리 중");
           const sttRes: SttResp = await callStt(blob);
+          setStt(sttRes);
 
-          // 2️⃣ IPA 변환
           const text = sttRes.rawText || sttRes.normText || "";
           if (!text) throw new Error("STT 결과가 비어있습니다.");
+
+          // 2️⃣ IPA 변환
           const ipaRes = await callIpa(text);
           setIpa(ipaRes);
 
-          // 3️⃣ LipSync 영상 생성
+          // 3️⃣ 발음 평가 + AI 스타일 피드백
+          try {
+            setIsEvaluating(true);
+
+            // 기준 문장: 우선 IPA 원문이 있으면 그걸, 아니면 인식 텍스트 사용
+            const referenceText = ipaRes.original || text;
+            const durationSec =
+              typeof sttRes.duration === "number" ? sttRes.duration : 0;
+
+            const evalRes = await callPronEval({
+              referenceText,
+              recognizedText: text,
+              durationSec,
+            });
+
+            setReport(evalRes.report);
+            setFeedback(evalRes.ai_feedback);
+          } finally {
+            setIsEvaluating(false);
+          }
+
+          // 4️⃣ LipSync 영상 생성
           const lipSyncRes = await callLipSync(blob, "/face.jpg");
           const video =
             lipSyncRes?.output_video ||
@@ -98,10 +139,17 @@ export default function RecorderWithViz() {
         >
           {phase === "녹음 중" ? "녹음 종료" : "녹음 시작"}
         </button>
-        <span className="text-sm text-gray-600">{phase}</span>
+        <span className="text-sm text-gray-600">
+          {phase}
+          {isEvaluating && " · 발음 평가 중..."}
+        </span>
       </div>
 
-      {err && <div className="text-red-600 bg-red-50 border p-2 rounded">{err}</div>}
+      {err && (
+        <div className="text-red-600 bg-red-50 border p-2 rounded">
+          {err}
+        </div>
+      )}
 
       {audioUrl && (
         <div>
@@ -128,11 +176,79 @@ export default function RecorderWithViz() {
         </div>
       )}
 
+      {/* 🔹 AI 발음 리포트 & 피드백 */}
+      {report && feedback && (
+        <div className="border-t pt-4 space-y-3">
+          <h2 className="text-xl font-bold">AI 발음 리포트</h2>
+
+          <div className="text-lg font-semibold">
+            종합 점수:{" "}
+            <span className="text-blue-600">{report.overall}</span>점
+          </div>
+
+          <div className="space-y-2 text-sm">
+            <div>
+              <div className="flex justify-between mb-1">
+                <span>정확도</span>
+                <span>{report.accuracy}%</span>
+              </div>
+              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-500"
+                  style={{ width: `${report.accuracy}%` }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between mb-1">
+                <span>유창성</span>
+                <span>
+                  {report.fluency.score}% (
+                  {report.fluency.syllables_per_second} 음절/초)
+                </span>
+              </div>
+              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-green-500"
+                  style={{ width: `${report.fluency.score}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="text-sm text-gray-800">
+            <div className="font-semibold mb-1">AI 코치 요약</div>
+            <p>{feedback.summary}</p>
+          </div>
+
+          <div className="text-sm text-gray-800">
+            <div className="font-semibold mb-1">연습 팁</div>
+            <ul className="list-disc list-inside space-y-1">
+              {feedback.tips.map((tip, i) => (
+                <li key={i}>{tip}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="text-xs text-gray-500">
+            수준: {feedback.level} · 추천 문장: “
+            {feedback.recommended_sentence}”
+          </div>
+        </div>
+      )}
+
       {videoUrl && (
         <div className="mt-3">
           <h2 className="text-xl font-bold">결과 영상</h2>
-          <video src={videoUrl} controls autoPlay loop className="w-full rounded-xl shadow" />
-          <p className="text-xs text-gray-500 mt-1">AI 입모양 시각화 결과</p>
+          <video
+            src={videoUrl}
+            controls
+            className="w-full rounded-xl shadow"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            AI 입모양 시각화 결과
+          </p>
         </div>
       )}
     </div>

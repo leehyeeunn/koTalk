@@ -17,8 +17,33 @@ export type IpaResp = {
   syllables: { char: string; ipa: string; roman: string }[];
 };
 
+/* 🔹 여기부터 추가: 발음 리포트 + AI 피드백 타입들 */
+export type PronReport = {
+  overall: number;
+  accuracy: number;
+  fluency: {
+    score: number;
+    syllables_per_second: number;
+  };
+};
+
+export type AiFeedback = {
+  summary: string;
+  tips: string[];
+  level: string;
+  recommended_sentence: string;
+};
+
+export type PronEvalResp = {
+  recognized_text: string;
+  report: PronReport;
+  ai_feedback: AiFeedback;
+};
+/* 🔹 추가 끝 */
+
 const STT_BASE = "http://127.0.0.1:5000";   // ✅ Flask 프록시
 const GOOEY_BASE = "http://127.0.0.1:5000"; // ✅ Flask 프록시
+const PRON_BASE = "http://127.0.0.1:8000";  // ✅ FastAPI (ipa랑 같은 서버)
 
 /** 🎙️ STT 호출 (Flask가 webm→wav 변환 처리) */
 export async function callStt(file: Blob): Promise<SttResp> {
@@ -66,5 +91,46 @@ export async function callLipSync(audioBlob: Blob, facePublicPath = "/face.jpg")
     return JSON.parse(txt);
   } catch {
     return { raw: txt } as any;
+  }
+}
+
+/** 📊 발음 평가 + AI 스타일 피드백 호출 */
+export async function callPronEval(input: {
+  referenceText: string;
+  recognizedText: string;
+  durationSec: number;
+}): Promise<PronEvalResp> {
+  const r = await fetch(`${PRON_BASE}/pron-eval`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      reference_text: input.referenceText,
+      recognized_text: input.recognizedText,
+      duration_sec: input.durationSec,
+    }),
+  });
+
+  const txt = await r.text();
+  if (!r.ok) {
+    throw new Error(`/pron-eval failed: ${r.status} - ${txt}`);
+  }
+
+  try {
+    return JSON.parse(txt);
+  } catch {
+    return {
+      recognized_text: input.recognizedText,
+      report: {
+        overall: 0,
+        accuracy: 0,
+        fluency: { score: 0, syllables_per_second: 0 },
+      },
+      ai_feedback: {
+        summary: txt,
+        tips: [],
+        level: "알 수 없음",
+        recommended_sentence: input.referenceText,
+      },
+    };
   }
 }
